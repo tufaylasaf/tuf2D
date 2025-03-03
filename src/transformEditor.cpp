@@ -129,3 +129,63 @@ void TransformEditor::DrawImGuiControls()
 
     ImGui::End();
 }
+
+void TransformEditor::DrawInteractionMatrix(std::vector<std::vector<float>> &matrix, int numTypes,
+                                            std::function<glm::vec3(int, int)> getColorFunc, const std::string &name, int min, int max)
+{
+    ImGui::Begin(name.c_str());
+
+    if (matrix.empty() || matrix[0].empty())
+    {
+        ImGui::Text("Matrix is empty!");
+        ImGui::End();
+        return;
+    }
+
+    int rows = matrix.size();
+    int cols = matrix[0].size();
+
+    ImGui::Text("Matrix Size: %d x %d", rows, cols);
+
+    float cellSize = 40.0f;        // Size for matrix cells
+    float colorButtonSize = 20.0f; // Smaller size for color buttons
+
+    ImGui::PushItemWidth(cellSize); // Set width for matrix cells
+
+    // Top row (Column labels)
+    ImGui::Text("   "); // Blank space for row header
+    ImGui::SameLine();
+    for (int j = 0; j < cols; ++j)
+    {
+        glm::vec3 color = getColorFunc(numTypes, j);
+        // Use smaller color buttons for column labels
+        ImGui::ColorButton(("##Col" + std::to_string(j)).c_str(), ImVec4(color.r, color.g, color.b, 1.0f), 0, ImVec2(cellSize, colorButtonSize / 2));
+        ImGui::SameLine();
+    }
+    ImGui::NewLine();
+
+    // Matrix values with row labels
+    for (int i = 0; i < rows; ++i)
+    {
+        glm::vec3 rowColor = getColorFunc(numTypes, i);
+
+        // Row label (color indicator)
+        ImGui::ColorButton(("##Row" + std::to_string(i)).c_str(), ImVec4(rowColor.r, rowColor.g, rowColor.b, 1.0f), 0, ImVec2(colorButtonSize, colorButtonSize));
+        ImGui::SameLine();
+
+        // Cells
+        for (int j = 0; j < cols; ++j)
+        {
+            std::string label = "##cell" + std::to_string(i) + "_" + std::to_string(j);
+            ImGui::PushID(label.c_str());
+            // Regular size for matrix cells
+            ImGui::DragFloat("", &matrix[i][j], 0.01f, min, max, "%.2f");
+            ImGui::PopID();
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+    }
+
+    ImGui::PopItemWidth(); // Restore the default width
+    ImGui::End();
+}

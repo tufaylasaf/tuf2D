@@ -5,28 +5,25 @@ class Camera2D
 {
 private:
     glm::mat4 m_projectionMatrix;
-    float m_aspectRatio;
+    float m_width, m_height;
 
 public:
-    Camera2D() : m_aspectRatio(1.0f)
+    Camera2D() : m_width(1600.0f), m_height(900.0f)
     {
-        m_projectionMatrix = glm::ortho(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f);
+        UpdateProjection();
     }
 
     void UpdateAspectRatio(float width, float height)
     {
-        m_aspectRatio = width / height;
+        m_width = width;
+        m_height = height;
+        UpdateProjection();
+    }
 
-        if (m_aspectRatio >= 1.0f)
-        {
-            // Wider than tall
-            m_projectionMatrix = glm::ortho(-m_aspectRatio, m_aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
-        }
-        else
-        {
-            // Taller than wide
-            m_projectionMatrix = glm::ortho(-1.0f, 1.0f, -1.0f / m_aspectRatio, 1.0f / m_aspectRatio, -1.0f, 1.0f);
-        }
+    void UpdateProjection()
+    {
+        // Top-left origin: (0,0) at top-left, (width,height) at bottom-right
+        m_projectionMatrix = glm::ortho(0.0f, m_width, m_height, 0.0f, -1.0f, 1.0f);
     }
 
     const glm::mat4 &GetProjectionMatrix() const

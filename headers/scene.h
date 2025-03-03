@@ -8,11 +8,10 @@
 
 class Scene2D
 {
-private:
-    std::vector<std::shared_ptr<Shape2D>> m_shapes;
-    Shader *m_defaultShader;
-
 public:
+    Shader *m_defaultShader;
+    std::vector<std::shared_ptr<Shape2D>> m_shapes;
+
     Scene2D();
     ~Scene2D();
 

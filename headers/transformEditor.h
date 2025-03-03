@@ -4,6 +4,7 @@
 #include <imgui.h>
 #include <memory>
 #include "shape2D.h"
+#include <functional>
 
 class TransformEditor
 {
@@ -22,9 +23,14 @@ public:
 
     // Draw the ImGui controls
     void DrawImGuiControls();
+    void DrawInteractionMatrix(std::vector<std::vector<float>> &matrix, int numTypes,
+                               std::function<glm::vec3(int, int)> getColorFunc, const std::string &name, int min, int max);
 
     // Get the currently selected shape
-    std::shared_ptr<Shape2D> GetSelectedShape() const { return m_selectedShape; }
+    std::shared_ptr<Shape2D> GetSelectedShape() const
+    {
+        return m_selectedShape;
+    }
 };
 
 #endif

@@ -5,6 +5,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/random.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -12,8 +13,8 @@
 #include <vector>
 #include <memory>
 #include <chrono>
+#include <random>
 
-// Include our new classes
 #include "triangle.h"
 #include "rectangle.h"
 #include "circle.h"
@@ -21,6 +22,7 @@
 #include "scene.h"
 #include "transformEditor.h"
 #include "camera.h"
+#include "particle.h"
 
 // Window dimensions
 const unsigned int SCR_WIDTH = 1600;
@@ -29,6 +31,15 @@ const unsigned int SCR_HEIGHT = 900;
 // Function declarations
 void framebuffer_size_callback(GLFWwindow *window, int width, int height);
 void processInput(GLFWwindow *window);
+glm::vec2 getRandomPosition(float minX, float maxX, float minY, float maxY);
+glm::vec3 getColor(int numTypes, int typeIndex);
+
+float getValueBetween(float min, float max)
+{
+    std::random_device rd;
+    std::uniform_real_distribution<float> dist(min, max);
+    return dist(rd);
+}
 
 int main()
 {
@@ -79,42 +90,22 @@ int main()
     Scene2D scene;
     scene.Initialize("res/shaders/default.vert", "res/shaders/default.frag");
 
-    // Create some shapes
-    auto triangle = scene.CreateShape<Triangle2D>(0.3f);
-    triangle->SetPosition(glm::vec2(-0.5f, 0.0f));
-    triangle->SetColor(glm::vec3(1.0f, 0.0f, 0.0f)); // Red
-
-    auto square = scene.CreateShape<Rectangle2D>(0.3f, 0.3f);
-    square->SetPosition(glm::vec2(0.0f, 0.0f));
-    square->SetColor(glm::vec3(0.0f, 1.0f, 0.0f)); // Green
-
-    auto circle = scene.CreateShape<Circle2D>(0.15f, 32);
-    circle->SetPosition(glm::vec2(0.5f, 0.0f));
-    circle->SetColor(glm::vec3(0.0f, 0.0f, 1.0f)); // Blue
-
-    // Create a custom polygon (pentagon)
-    std::vector<glm::vec2> pentagonPoints = {
-        glm::vec2(0.0f, 0.2f),     // Top
-        glm::vec2(0.19f, 0.06f),   // Top right
-        glm::vec2(0.12f, -0.16f),  // Bottom right
-        glm::vec2(-0.12f, -0.16f), // Bottom left
-        glm::vec2(-0.19f, 0.06f)   // Top left
-    };
-    auto polygon = scene.CreateShape<Polygon2D>(pentagonPoints);
-    polygon->SetPosition(glm::vec2(0.0f, -0.5f));
-    polygon->SetColor(glm::vec3(1.0f, 1.0f, 0.0f)); // Yellow
+    // auto circle = scene.CreateShape<Circle2D>(0.15f, 32);
+    // circle->SetPosition(glm::vec2(0.0f, 0.0f));
+    // circle->SetColor(glm::vec3(0.0f, 0.0f, 1.0f)); // Blue
 
     // Setup transform editor
     TransformEditor editor;
-    editor.SelectShape(triangle, "Triangle");
+    // editor.SelectShape(circle, "Circle");
 
     // Setup viewport
     int viewport_width, viewport_height;
     glfwGetFramebufferSize(window, &viewport_width, &viewport_height);
     glViewport(0, 0, viewport_width, viewport_height);
 
-    // Setup projection matrix
-    glm::mat4 projection = glm::ortho(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f);
+    Camera2D camera;
+    camera.UpdateAspectRatio(viewport_width, viewport_height);
+    glfwSetWindowUserPointer(window, &camera);
 
     // Variables for FPS and render time calculation
     int frameCount = 0;
@@ -125,8 +116,44 @@ int main()
     float lastFpsUpdateTime = 0.0f;
     std::chrono::high_resolution_clock::time_point frameStartTime;
     std::chrono::high_resolution_clock::time_point frameEndTime;
-    float renderTime = 0.0f;
 
+    std::vector<Particle> particles;
+    int numParticles = 600;
+    int numTypes = 5;
+    std::vector<std::shared_ptr<Shape2D>> particleShapes;
+
+    // Initialize interaction matrices with meaningful default values
+    std::vector<std::vector<float>> minDist(numTypes, std::vector<float>(numTypes, 40.0f));
+    std::vector<std::vector<float>> forces(numTypes, std::vector<float>(numTypes, 0.0f));
+    std::vector<std::vector<float>> radii(numTypes, std::vector<float>(numTypes, 150.0f));
+
+    // Create particles
+    for (int i = 0; i < numParticles; i++)
+    {
+        int type = glm::linearRand(0, numTypes - 1);
+        Particle p = Particle(getRandomPosition(0, SCR_WIDTH, 0, SCR_HEIGHT), type);
+
+        auto shape = std::make_shared<Circle2D>(3.0f, 8);
+        shape->SetPosition(p.pos);
+        shape->SetColor(getColor(numTypes, p.type));
+
+        scene.AddShape(shape);
+        particleShapes.push_back(shape);
+        particles.push_back(p);
+    }
+
+    for (int i = 0; i < numTypes; i++)
+    {
+        for (int j = 0; j < numTypes; j++)
+        {
+            forces[i][j] = getValueBetween(0.3f, 1.0f);
+            if (getValueBetween(0.0f, 100.0f) < 50.0f)
+                forces[i][j] *= -1;
+
+            minDist[i][j] = getValueBetween(30.0f, 50.0f);
+            radii[i][j] = getValueBetween(70.0f, 250.0f);
+        }
+    }
     // Render loop
     while (!glfwWindowShouldClose(window))
     {
@@ -151,6 +178,12 @@ int main()
         // Process input
         processInput(window);
 
+        for (int i = 0; i < particles.size(); i++)
+        {
+            particles[i].update(frameTime, particles, minDist, forces, radii, SCR_WIDTH, SCR_HEIGHT);
+            particleShapes[i]->SetPosition(particles[i].pos);
+        }
+
         // Start ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -161,19 +194,16 @@ int main()
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // Draw ImGui shape selector
-        ImGui::Begin("Shape Selector");
-        if (ImGui::Button("Triangle"))
-            editor.SelectShape(triangle, "Triangle");
-        if (ImGui::Button("Square"))
-            editor.SelectShape(square, "Square");
-        if (ImGui::Button("Circle"))
-            editor.SelectShape(circle, "Circle");
-        if (ImGui::Button("Polygon"))
-            editor.SelectShape(polygon, "Polygon");
-        ImGui::End();
+        // ImGui::Begin("Shape Selector");
+        // if (ImGui::Button("Circle"))
+        //     editor.SelectShape(circle, "Circle");
+        // ImGui::End();
 
         // Draw transform editor
-        editor.DrawImGuiControls();
+        // editor.DrawImGuiControls();
+        // editor.DrawInteractionMatrix(minDist, numTypes, getColor, "Min Dist", 60.f, 100.f);
+        editor.DrawInteractionMatrix(forces, numTypes, getColor, "Forces", -1.f, 1.f);
+        // editor.DrawInteractionMatrix(radii, numTypes, getColor, "Radii", 140.f, 500.f);
 
         // Stats window
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
@@ -181,17 +211,25 @@ int main()
         ImGui::Begin("Performance Stats");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Text("Frame Time: %.2f ms", frameTime * 1000.0f);
-        ImGui::Text("Render Time: %.2f ms", renderTime * 1000.0f);
+        if (ImGui::Button("Randomize"))
+        {
+            for (int i = 0; i < numTypes; i++)
+            {
+                for (int j = 0; j < numTypes; j++)
+                {
+                    forces[i][j] = getValueBetween(0.3f, 1.0f);
+                    if (getValueBetween(0.0f, 100.0f) < 50.0f)
+                        forces[i][j] *= -1;
+
+                    minDist[i][j] = getValueBetween(30.0f, 50.0f);
+                    radii[i][j] = getValueBetween(70.0f, 250.0f);
+                }
+            }
+        }
         ImGui::End();
 
-        // Update and draw the scene
-        // Set the view and projection matrix in the default shader
-        Camera2D camera;
-        camera.UpdateAspectRatio(viewport_width, viewport_height);
-        glfwSetWindowUserPointer(window, &camera);
-
         // In your render loop, replace the projection matrix setup
-        auto shader = triangle->GetShader();
+        auto shader = scene.m_defaultShader;
         shader->Activate();
 
         GLuint viewLoc = glGetUniformLocation(shader->ID, "view");
@@ -213,7 +251,6 @@ int main()
 
         // End frame timing
         frameEndTime = std::chrono::high_resolution_clock::now();
-        renderTime = std::chrono::duration<float, std::chrono::seconds::period>(frameEndTime - frameStartTime).count();
     }
 
     // Cleanup ImGui
@@ -245,4 +282,61 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height)
     {
         camera->UpdateAspectRatio((float)width, (float)height);
     }
+}
+
+glm::vec2 getRandomPosition(float minX, float maxX, float minY, float maxY)
+{
+    std::random_device rd;
+    std::uniform_real_distribution<float> distX(minX, maxX);
+    std::uniform_real_distribution<float> distY(minY, maxY);
+
+    return glm::vec2(distX(rd), distY(rd));
+}
+
+int getRandomType(int numTypes)
+{
+    std::random_device rd;
+    std::uniform_int_distribution<int> dist(0, numTypes - 1);
+
+    return dist(rd);
+}
+
+glm::vec3 getColor(int numTypes, int typeIndex)
+{
+    if (numTypes <= 0)
+        return glm::vec3(1.0f, 1.0f, 1.0f); // Default white if invalid numTypes
+
+    float hue = fmod((360.0f / numTypes) * typeIndex, 360.0f); // Distribute hues evenly
+    float r, g, b;
+
+    int i = int(hue / 60.0f) % 6;
+    float f = (hue / 60.0f) - i;
+    float q = 1.0f - f;
+
+    switch (i)
+    {
+    case 0:
+        r = 1.0f, g = f, b = 0.0f;
+        break;
+    case 1:
+        r = q, g = 1.0f, b = 0.0f;
+        break;
+    case 2:
+        r = 0.0f, g = 1.0f, b = f;
+        break;
+    case 3:
+        r = 0.0f, g = q, b = 1.0f;
+        break;
+    case 4:
+        r = f, g = 0.0f, b = 1.0f;
+        break;
+    case 5:
+        r = 1.0f, g = 0.0f, b = q;
+        break;
+    default:
+        r = g = b = 1.0f;
+        break;
+    }
+
+    return glm::vec3(r, g, b);
 }
