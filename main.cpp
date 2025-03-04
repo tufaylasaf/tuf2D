@@ -14,6 +14,9 @@
 #include <memory>
 #include <chrono>
 #include <random>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 #include "triangle.h"
 #include "rectangle.h"
@@ -25,14 +28,36 @@
 #include "particle.h"
 
 // Window dimensions
-const unsigned int SCR_WIDTH = 1280;
-const unsigned int SCR_HEIGHT = 720;
+const unsigned int SCR_WIDTH = 1600;
+const unsigned int SCR_HEIGHT = 900;
 
 // Function declarations
 void framebuffer_size_callback(GLFWwindow *window, int width, int height);
-void processInput(GLFWwindow *window);
+void processInput(GLFWwindow *window, int numTypes, std::vector<std::vector<float>> &minDist,
+                  std::vector<std::vector<float>> &forces,
+                  std::vector<std::vector<float>> &radii);
 glm::vec2 getRandomPosition(float minX, float maxX, float minY, float maxY);
 glm::vec3 getColor(int numTypes, int typeIndex);
+
+// Thread worker function to update particles
+void updateParticlesBatch(
+    std::vector<Particle> &particles,
+    std::vector<std::shared_ptr<Shape2D>> &particleShapes,
+    std::vector<std::vector<std::vector<Particle *>>> &grid,
+    int gridSize, int gridHeight, int gridWidth,
+    std::vector<std::vector<float>> &minDist,
+    std::vector<std::vector<float>> &forces,
+    std::vector<std::vector<float>> &radii,
+    int startIdx, int endIdx,
+    float screenWidth, float screenHeight);
+
+// Thread worker function to rebuild grid
+void rebuildGridBatch(
+    std::vector<Particle> &particles,
+    std::vector<std::vector<std::vector<Particle *>>> &grid,
+    int gridSize, int gridHeight, int gridWidth,
+    int startIdx, int endIdx,
+    std::mutex &gridMutex);
 
 float getValueBetween(float min, float max)
 {
@@ -90,13 +115,8 @@ int main()
     Scene2D scene;
     scene.Initialize("res/shaders/default.vert", "res/shaders/default.frag");
 
-    // auto circle = scene.CreateShape<Circle2D>(0.15f, 32);
-    // circle->SetPosition(glm::vec2(0.0f, 0.0f));
-    // circle->SetColor(glm::vec3(0.0f, 0.0f, 1.0f)); // Blue
-
     // Setup transform editor
     TransformEditor editor;
-    // editor.SelectShape(circle, "Circle");
 
     // Setup viewport
     int viewport_width, viewport_height;
@@ -117,9 +137,10 @@ int main()
     std::chrono::high_resolution_clock::time_point frameStartTime;
     std::chrono::high_resolution_clock::time_point frameEndTime;
 
+    int numParticles = 1800;
     std::vector<Particle> particles;
+    particles.reserve(numParticles);
 
-    int numParticles = 1500;
     int numTypes = 7;
     std::vector<std::shared_ptr<Shape2D>> particleShapes;
 
@@ -127,33 +148,6 @@ int main()
     std::vector<std::vector<float>> minDist(numTypes, std::vector<float>(numTypes, 40.0f));
     std::vector<std::vector<float>> forces(numTypes, std::vector<float>(numTypes, 0.0f));
     std::vector<std::vector<float>> radii(numTypes, std::vector<float>(numTypes, 150.0f));
-
-    // Grid
-    int gridSize = 40;
-    int gridWidth = SCR_WIDTH / gridSize;
-    int gridHeight = SCR_HEIGHT / gridSize;
-
-    std::vector<std::vector<std::vector<Particle *>>> grid(
-        gridHeight,
-        std::vector<std::vector<Particle *>>(
-            gridWidth,
-            std::vector<Particle *>()));
-    // Create particles
-    for (int i = 0; i < numParticles; i++)
-    {
-        int type = glm::linearRand(0, numTypes - 1);
-        Particle p = Particle(getRandomPosition(0, SCR_WIDTH, 0, SCR_HEIGHT), type);
-
-        auto shape = std::make_shared<Circle2D>(2.0f, 6);
-        shape->SetPosition(p.pos);
-        shape->SetColor(getColor(numTypes, p.type));
-
-        scene.AddShape(shape);
-        particleShapes.push_back(shape);
-        particles.push_back(p);
-
-        grid[int(p.pos.y / gridSize)][int(p.pos.x / gridSize)].push_back(&p);
-    }
 
     for (int i = 0; i < numTypes; i++)
     {
@@ -167,6 +161,43 @@ int main()
             radii[i][j] = getValueBetween(70.0f, 250.0f);
         }
     }
+
+    // Grid
+    int gridSize = 50;
+    int gridWidth = SCR_WIDTH / gridSize;
+    int gridHeight = SCR_HEIGHT / gridSize;
+
+    std::vector<std::vector<std::vector<Particle *>>> grid(
+        gridHeight,
+        std::vector<std::vector<Particle *>>(
+            gridWidth,
+            std::vector<Particle *>()));
+    // Create particles
+    for (int i = 0; i < numParticles; i++)
+    {
+        int type = int(getValueBetween(0, numTypes));
+        Particle p = Particle(getRandomPosition(0, SCR_WIDTH, 0, SCR_HEIGHT), type);
+
+        auto shape = std::make_shared<Circle2D>(2.5f, 4);
+        shape->SetPosition(p.pos);
+        shape->SetColor(getColor(numTypes, p.type));
+
+        scene.AddShape(shape);
+        particleShapes.push_back(shape);
+        particles.push_back(p);
+
+        grid[int(p.pos.y / gridSize)][int(p.pos.x / gridSize)].push_back(&p);
+    }
+
+    // Threading configuration
+    const unsigned int numThreads = std::thread::hardware_concurrency();
+
+    // Control for multithreading
+    bool enableMultithreading = true;
+
+    // Mutex for grid access
+    std::mutex gridMutex;
+
     // Render loop
     while (!glfwWindowShouldClose(window))
     {
@@ -187,33 +218,96 @@ int main()
             frameCount = 0;
             lastFpsUpdateTime = currentTime;
         }
-
         // Process input
-        processInput(window);
+        processInput(window, numTypes, minDist, forces, radii);
 
-        for (int i = 0; i < particles.size(); i++)
+        if (enableMultithreading)
         {
-            particles[i].update(grid, gridSize, gridHeight, gridWidth, minDist, forces, radii, SCR_WIDTH, SCR_HEIGHT);
-            particleShapes[i]->SetPosition(particles[i].pos);
-        }
+            // Multithreaded particle update
+            std::vector<std::thread> threads;
+            const int particlesPerThread = numParticles / numThreads;
 
-        // Then, clear and rebuild the grid with updated positions
-        for (int i = 0; i < gridHeight; i++)
-        {
-            for (int j = 0; j < gridWidth; j++)
+            // Update particles in parallel
+            for (unsigned int t = 0; t < numThreads; t++)
             {
-                grid[i][j].clear();
+                int startIdx = t * particlesPerThread;
+                int endIdx = (t == numThreads - 1) ? numParticles : (t + 1) * particlesPerThread;
+
+                threads.emplace_back(updateParticlesBatch,
+                                     std::ref(particles),
+                                     std::ref(particleShapes),
+                                     std::ref(grid),
+                                     gridSize, gridHeight, gridWidth,
+                                     std::ref(minDist),
+                                     std::ref(forces),
+                                     std::ref(radii),
+                                     startIdx, endIdx,
+                                     SCR_WIDTH, SCR_HEIGHT);
+            }
+
+            // Wait for all update threads to finish
+            for (auto &thread : threads)
+            {
+                thread.join();
+            }
+            threads.clear();
+
+            // Clear the grid for rebuilding
+            for (int i = 0; i < gridHeight; i++)
+            {
+                for (int j = 0; j < gridWidth; j++)
+                {
+                    grid[i][j].clear();
+                }
+            }
+
+            // Rebuild the grid in parallel
+            for (unsigned int t = 0; t < numThreads; t++)
+            {
+                int startIdx = t * particlesPerThread;
+                int endIdx = (t == numThreads - 1) ? numParticles : (t + 1) * particlesPerThread;
+
+                threads.emplace_back(rebuildGridBatch,
+                                     std::ref(particles),
+                                     std::ref(grid),
+                                     gridSize, gridHeight, gridWidth,
+                                     startIdx, endIdx,
+                                     std::ref(gridMutex));
+            }
+
+            // Wait for all rebuild threads to finish
+            for (auto &thread : threads)
+            {
+                thread.join();
             }
         }
-
-        for (auto &particle : particles)
+        else
         {
-            int x = particle.pos.x / gridSize;
-            int y = particle.pos.y / gridSize;
-
-            if (x >= 0 && x < gridWidth && y >= 0 && y < gridHeight)
+            // Original single-threaded code
+            for (int i = 0; i < particles.size(); i++)
             {
-                grid[y][x].push_back(&particle);
+                particles[i].update(grid, gridSize, gridHeight, gridWidth, minDist, forces, radii, SCR_WIDTH, SCR_HEIGHT);
+                particleShapes[i]->SetPosition(particles[i].pos);
+            }
+
+            // Then, clear and rebuild the grid with updated positions
+            for (int i = 0; i < gridHeight; i++)
+            {
+                for (int j = 0; j < gridWidth; j++)
+                {
+                    grid[i][j].clear();
+                }
+            }
+
+            for (auto &particle : particles)
+            {
+                int x = particle.pos.x / gridSize;
+                int y = particle.pos.y / gridSize;
+
+                if (x >= 0 && x < gridWidth && y >= 0 && y < gridHeight)
+                {
+                    grid[y][x].push_back(&particle);
+                }
             }
         }
 
@@ -226,24 +320,17 @@ int main()
         glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Draw ImGui shape selector
-        // ImGui::Begin("Shape Selector");
-        // if (ImGui::Button("Circle"))
-        //     editor.SelectShape(circle, "Circle");
-        // ImGui::End();
-
         // Draw transform editor
-        // editor.DrawImGuiControls();
-        // editor.DrawInteractionMatrix(minDist, numTypes, getColor, "Min Dist", 60.f, 100.f);
         editor.DrawInteractionMatrix(forces, numTypes, getColor, "Forces", -1.f, 1.f);
-        // editor.DrawInteractionMatrix(radii, numTypes, getColor, "Radii", 140.f, 500.f);
 
         // Stats window
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(200, 100), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(250, 150), ImGuiCond_FirstUseEver);
         ImGui::Begin("Performance Stats");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Text("Frame Time: %.2f ms", frameTime * 1000.0f);
+        ImGui::Text("Particles: %d", numParticles);
+        ImGui::Checkbox("Enable Multithreading", &enableMultithreading);
         if (ImGui::Button("Randomize"))
         {
             for (int i = 0; i < numTypes; i++)
@@ -297,11 +384,73 @@ int main()
     return 0;
 }
 
+// Thread worker function to update particles
+void updateParticlesBatch(
+    std::vector<Particle> &particles,
+    std::vector<std::shared_ptr<Shape2D>> &particleShapes,
+    std::vector<std::vector<std::vector<Particle *>>> &grid,
+    int gridSize, int gridHeight, int gridWidth,
+    std::vector<std::vector<float>> &minDist,
+    std::vector<std::vector<float>> &forces,
+    std::vector<std::vector<float>> &radii,
+    int startIdx, int endIdx,
+    float screenWidth, float screenHeight)
+{
+    for (int i = startIdx; i < endIdx; i++)
+    {
+        particles[i].update(grid, gridSize, gridHeight, gridWidth, minDist, forces, radii, screenWidth, screenHeight);
+        particleShapes[i]->SetPosition(particles[i].pos);
+    }
+}
+
+// Thread worker function to rebuild grid
+void rebuildGridBatch(
+    std::vector<Particle> &particles,
+    std::vector<std::vector<std::vector<Particle *>>> &grid,
+    int gridSize, int gridHeight, int gridWidth,
+    int startIdx, int endIdx,
+    std::mutex &gridMutex)
+{
+    for (int i = startIdx; i < endIdx; i++)
+    {
+        Particle &particle = particles[i];
+        int x = particle.pos.x / gridSize;
+        int y = particle.pos.y / gridSize;
+
+        // Handle wrapping
+        x = (x + gridWidth) % gridWidth;
+        y = (y + gridHeight) % gridHeight;
+
+        if (x >= 0 && x < gridWidth && y >= 0 && y < gridHeight)
+        {
+            // Lock the mutex when updating the grid
+            std::lock_guard<std::mutex> lock(gridMutex);
+            grid[y][x].push_back(&particle);
+        }
+    }
+}
+
 // Process keyboard input
-void processInput(GLFWwindow *window)
+void processInput(GLFWwindow *window, int numTypes, std::vector<std::vector<float>> &minDist,
+                  std::vector<std::vector<float>> &forces,
+                  std::vector<std::vector<float>> &radii)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
+
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+        for (int i = 0; i < numTypes; i++)
+        {
+            for (int j = 0; j < numTypes; j++)
+            {
+                forces[i][j] = getValueBetween(0.3f, 1.0f);
+                if (getValueBetween(0.0f, 100.0f) < 50.0f)
+                    forces[i][j] *= -1;
+
+                minDist[i][j] = getValueBetween(30.0f, 50.0f);
+                radii[i][j] = getValueBetween(70.0f, 250.0f);
+            }
+        }
 }
 
 // Handle window resize

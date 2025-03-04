@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <glm/gtc/random.hpp>
 
-float K = 0.075f;
+float K = 0.055f;
 float F = 0.85f;
 
 void Particle::update(std::vector<Particle> &particles, std::vector<std::vector<float>> minDist,
@@ -85,7 +85,7 @@ void Particle::update(std::vector<std::vector<std::vector<Particle *>>> &grid,
                       std::vector<std::vector<float>> &radii,
                       float w, float h)
 {
-    int range = 1;
+    int range = 2;
     int r = int(pos.y / gridSize);
     int c = int(pos.x / gridSize);
 
