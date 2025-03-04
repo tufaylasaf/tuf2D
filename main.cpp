@@ -25,8 +25,8 @@
 #include "particle.h"
 
 // Window dimensions
-const unsigned int SCR_WIDTH = 1600;
-const unsigned int SCR_HEIGHT = 900;
+const unsigned int SCR_WIDTH = 1280;
+const unsigned int SCR_HEIGHT = 720;
 
 // Function declarations
 void framebuffer_size_callback(GLFWwindow *window, int width, int height);
@@ -118,8 +118,9 @@ int main()
     std::chrono::high_resolution_clock::time_point frameEndTime;
 
     std::vector<Particle> particles;
-    int numParticles = 600;
-    int numTypes = 5;
+
+    int numParticles = 1500;
+    int numTypes = 7;
     std::vector<std::shared_ptr<Shape2D>> particleShapes;
 
     // Initialize interaction matrices with meaningful default values
@@ -127,19 +128,31 @@ int main()
     std::vector<std::vector<float>> forces(numTypes, std::vector<float>(numTypes, 0.0f));
     std::vector<std::vector<float>> radii(numTypes, std::vector<float>(numTypes, 150.0f));
 
+    // Grid
+    int gridSize = 40;
+    int gridWidth = SCR_WIDTH / gridSize;
+    int gridHeight = SCR_HEIGHT / gridSize;
+
+    std::vector<std::vector<std::vector<Particle *>>> grid(
+        gridHeight,
+        std::vector<std::vector<Particle *>>(
+            gridWidth,
+            std::vector<Particle *>()));
     // Create particles
     for (int i = 0; i < numParticles; i++)
     {
         int type = glm::linearRand(0, numTypes - 1);
         Particle p = Particle(getRandomPosition(0, SCR_WIDTH, 0, SCR_HEIGHT), type);
 
-        auto shape = std::make_shared<Circle2D>(3.0f, 8);
+        auto shape = std::make_shared<Circle2D>(2.0f, 6);
         shape->SetPosition(p.pos);
         shape->SetColor(getColor(numTypes, p.type));
 
         scene.AddShape(shape);
         particleShapes.push_back(shape);
         particles.push_back(p);
+
+        grid[int(p.pos.y / gridSize)][int(p.pos.x / gridSize)].push_back(&p);
     }
 
     for (int i = 0; i < numTypes; i++)
@@ -180,8 +193,28 @@ int main()
 
         for (int i = 0; i < particles.size(); i++)
         {
-            particles[i].update(frameTime, particles, minDist, forces, radii, SCR_WIDTH, SCR_HEIGHT);
+            particles[i].update(grid, gridSize, gridHeight, gridWidth, minDist, forces, radii, SCR_WIDTH, SCR_HEIGHT);
             particleShapes[i]->SetPosition(particles[i].pos);
+        }
+
+        // Then, clear and rebuild the grid with updated positions
+        for (int i = 0; i < gridHeight; i++)
+        {
+            for (int j = 0; j < gridWidth; j++)
+            {
+                grid[i][j].clear();
+            }
+        }
+
+        for (auto &particle : particles)
+        {
+            int x = particle.pos.x / gridSize;
+            int y = particle.pos.y / gridSize;
+
+            if (x >= 0 && x < gridWidth && y >= 0 && y < gridHeight)
+            {
+                grid[y][x].push_back(&particle);
+            }
         }
 
         // Start ImGui frame
